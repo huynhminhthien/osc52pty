@@ -7,6 +7,8 @@ type parser struct {
 	ignoredDataHandler  dataHandler
 	findCaptureBegin    bool
 	capturedData        []byte
+	maxCapturedDataSize int
+	discardCapturedData bool
 }
 
 func (p *parser) Init(captureBegin []byte, captureEnd []byte, capturedDataHandler dataHandler, ignoredDataHandler dataHandler) *parser {
@@ -15,6 +17,13 @@ func (p *parser) Init(captureBegin []byte, captureEnd []byte, capturedDataHandle
 	p.capturedDataHandler = capturedDataHandler
 	p.ignoredDataHandler = ignoredDataHandler
 	p.findCaptureBegin = true
+	p.capturedData = nil
+	p.discardCapturedData = false
+	return p
+}
+
+func (p *parser) SetMaxCapturedDataSize(max int) *parser {
+	p.maxCapturedDataSize = max
 	return p
 }
 
@@ -40,17 +49,29 @@ Loop:
 			data = data[i:]
 			p.findCaptureBegin = false
 		} else {
-			i, ok := p.captureEndPattern.FindStop(data, &p.capturedData)
+			capturedData := &p.capturedData
+			var discardedData []byte
+			if p.discardCapturedData {
+				capturedData = &discardedData
+			}
+
+			i, ok := p.captureEndPattern.FindStop(data, capturedData)
+
+			if !p.discardCapturedData && p.maxCapturedDataSize > 0 && len(p.capturedData) > p.maxCapturedDataSize {
+				p.capturedData = nil
+				p.discardCapturedData = true
+			}
 
 			if !ok {
 				break Loop
 			}
 
-			if !p.capturedDataHandler(p.capturedData) {
+			if !p.discardCapturedData && !p.capturedDataHandler(p.capturedData) {
 				return false
 			}
 
 			p.capturedData = nil
+			p.discardCapturedData = false
 			data = data[i:]
 			p.findCaptureBegin = true
 		}

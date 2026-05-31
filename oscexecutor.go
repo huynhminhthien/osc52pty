@@ -17,12 +17,15 @@ type oscExecutor struct {
 
 var _ shellInterceptor = (*oscExecutor)(nil)
 
+const maxOSC52PayloadSize = 1024 * 1024
+
 func (oe *oscExecutor) Init(inputDataSender, outputDataSender dataSender) *oscExecutor {
 	oe.inputDataSender = inputDataSender
 	if oe.clipboardWriter == nil {
 		oe.clipboardWriter = new(nativeClipboardWriter)
 	}
-	oe.parser.Init(escapeSequenceBegin, escapeSequenceEnd, oe.handleDataToCopy, dataHandler(outputDataSender))
+	oe.parser.Init(escapeSequenceBegin, escapeSequenceEnd, oe.handleDataToCopy, dataHandler(outputDataSender)).
+		SetMaxCapturedDataSize(maxOSC52PayloadSize)
 	return oe
 }
 

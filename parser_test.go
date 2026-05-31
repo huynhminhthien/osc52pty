@@ -117,6 +117,30 @@ func TestParser(t *testing.T) {
 	}
 }
 
+func TestParserDropsOversizedCapturedData(t *testing.T) {
+	var capturedData []byte
+	var ignoredData []byte
+
+	p := new(parser).Init(
+		[]byte("<<<"),
+		[]byte(">>>"),
+		func(data []byte) bool {
+			capturedData = append(capturedData, data...)
+			return true
+		},
+		func(data []byte) bool {
+			ignoredData = append(ignoredData, data...)
+			return true
+		},
+	).SetMaxCapturedDataSize(4)
+
+	ok := p.FeedData([]byte("aaa<<<12345>>>bbb<<<ok>>>ccc"))
+
+	assert.True(t, ok)
+	assert.Equal(t, "ok", string(capturedData))
+	assert.Equal(t, "aaabbbccc", string(ignoredData))
+}
+
 func TestPattern(t *testing.T) {
 	type FindStopCall struct {
 		Data        string
