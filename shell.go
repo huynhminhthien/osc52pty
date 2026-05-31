@@ -6,11 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
-	"syscall"
-
-	"github.com/creack/pty"
-	"golang.org/x/crypto/ssh/terminal"
 )
 
 const bufferSize = 8 * 1024
@@ -21,6 +16,9 @@ type shell struct {
 	stdout      io.WriteCloser
 	interceptor shellInterceptor
 	command     *exec.Cmd
+	commandIn   io.WriteCloser
+	commandOut  io.ReadCloser
+	outputClose io.Closer
 	ptmx        *os.File
 	cleanups    []func(*shell)
 }
@@ -48,7 +46,7 @@ func (s *shell) Open(options shellOptions) (returnedErr error) {
 		}
 	}()
 
-	if err := s.startPTY(); err != nil {
+	if err := s.startCommand(); err != nil {
 		return err
 	}
 
@@ -78,6 +76,8 @@ func (s *shell) Wait() (_ int, returnedErr error) {
 	}()
 
 	if err := s.command.Wait(); err != nil {
+		s.closeCommandOutput()
+
 		if exitError, ok := err.(*exec.ExitError); ok {
 			return exitError.ExitCode(), nil
 		}
@@ -85,13 +85,21 @@ func (s *shell) Wait() (_ int, returnedErr error) {
 		return 0, fmt.Errorf("wait shell failed: %v", err)
 	}
 
+	s.closeCommandOutput()
 	return 0, nil
+}
+
+func (s *shell) closeCommandOutput() {
+	if s.outputClose != nil {
+		s.outputClose.Close()
+		s.outputClose = nil
+	}
 }
 
 func (s *shell) createShellInterceptor(shellInterceptorFactory shellInterceptorFactory) error {
 	inputDataSender := func(data []byte) bool {
-		if _, err := s.ptmx.Write(data); err != nil {
-			log.Printf("write ptmx failed: %v", err)
+		if _, err := s.commandIn.Write(data); err != nil {
+			log.Printf("write command stdin failed: %v", err)
 			return false
 		}
 
@@ -116,58 +124,6 @@ func (s *shell) createShellInterceptor(shellInterceptorFactory shellInterceptorF
 
 	s.interceptor = shellInterceptor
 	return nil
-}
-
-func (s *shell) startPTY() error {
-	s.command = exec.Command(s.cmdLine[0], s.cmdLine[1:]...)
-	var err error
-	s.ptmx, err = pty.Start(s.command)
-
-	if err != nil {
-		return fmt.Errorf("start pty failed: %v", err)
-	}
-
-	s.cleanups = append(s.cleanups, func(s *shell) { s.ptmx.Close() })
-	return nil
-}
-
-func (s *shell) makeTerminalRaw() error {
-	stdin, ok := s.stdin.(*os.File)
-
-	if !ok {
-		return nil
-	}
-
-	oldState, err := terminal.MakeRaw(int(stdin.Fd()))
-
-	if err != nil {
-		return fmt.Errorf("make terminal raw failed: %v", err)
-	}
-
-	s.cleanups = append(s.cleanups, func(*shell) { terminal.Restore(int(stdin.Fd()), oldState) })
-	return nil
-}
-
-func (s *shell) resizePTY() {
-	stdin, ok := s.stdin.(*os.File)
-
-	if !ok {
-		return
-	}
-
-	signals := make(chan os.Signal, 1)
-	s.cleanups = append(s.cleanups, func(*shell) { close(signals) })
-	signal.Notify(signals, syscall.SIGWINCH)
-
-	go func() {
-		for range signals {
-			if err := pty.InheritSize(stdin, s.ptmx); err != nil {
-				log.Printf("resize pty failed: %s", err)
-			}
-		}
-	}()
-
-	signals <- syscall.SIGWINCH
 }
 
 func (s *shell) pipeStdin() {
@@ -201,14 +157,14 @@ func (s *shell) pipeStdout() {
 		buffer := make([]byte, bufferSize)
 
 		for {
-			n, err := s.ptmx.Read(buffer)
+			n, err := s.commandOut.Read(buffer)
 
 			if err != nil {
 				if err == io.EOF {
 					return
 				}
 
-				log.Printf("read ptmx failed: %v", err)
+				log.Printf("read command output failed: %v", err)
 				return
 			}
 
@@ -278,14 +234,4 @@ func dummyShellInterceptorFactory(inputDataSender, outputDataSender dataSender) 
 		InputDataSender:  inputDataSender,
 		OutputDataSender: outputDataSender,
 	}, nil
-}
-
-func getShellName() string {
-	shellName, ok := os.LookupEnv("SHELL")
-
-	if !ok {
-		shellName = "sh"
-	}
-
-	return shellName
 }
