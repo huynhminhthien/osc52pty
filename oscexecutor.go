@@ -2,15 +2,16 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"log"
-	"os/exec"
-	"time"
+	"sync"
+
+	"golang.design/x/clipboard"
 )
 
 type oscExecutor struct {
 	inputDataSender dataSender
+	clipboardWriter clipboardWriter
 	parser          parser
 }
 
@@ -18,6 +19,9 @@ var _ shellInterceptor = (*oscExecutor)(nil)
 
 func (oe *oscExecutor) Init(inputDataSender, outputDataSender dataSender) *oscExecutor {
 	oe.inputDataSender = inputDataSender
+	if oe.clipboardWriter == nil {
+		oe.clipboardWriter = new(nativeClipboardWriter)
+	}
 	oe.parser.Init(escapeSequenceBegin, escapeSequenceEnd, oe.handleDataToCopy, dataHandler(outputDataSender))
 	return oe
 }
@@ -31,7 +35,7 @@ func (oe *oscExecutor) HandleOutputData(data []byte) bool {
 }
 
 func (oe *oscExecutor) handleDataToCopy(data []byte) bool {
-	if err := setClipboard(copyToClipboardCmdLine, data); err != nil {
+	if err := setClipboard(oe.clipboardWriter, data); err != nil {
 		log.Printf("set clipboard failed: %v", err)
 	}
 
@@ -43,28 +47,42 @@ var (
 	escapeSequenceEnd   = []byte("\x07")
 )
 
-var copyToClipboardCmdLine = []string{"/usr/bin/pbcopy", "-pboard", "general"}
+type clipboardWriter interface {
+	WriteText([]byte) error
+}
 
-func setClipboard(copyToClipboardCmdLine []string, rawData []byte) error {
-	// at this point, string will still be prepended by command and seperator
+type nativeClipboardWriter struct {
+	initOnce sync.Once
+	initErr  error
+}
+
+func (ncw *nativeClipboardWriter) WriteText(data []byte) error {
+	ncw.initOnce.Do(func() {
+		ncw.initErr = clipboard.Init()
+	})
+
+	if ncw.initErr != nil {
+		return ncw.initErr
+	}
+
+	clipboard.Write(clipboard.FmtText, data)
+	return nil
+}
+
+func setClipboard(writer clipboardWriter, rawData []byte) error {
+	// At this point, string will still be prepended by command and separator.
 	// https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
 	//        The first, Pc, may contain zero or more characters from the
-  //        set c , p , q , s , 0 , 1 , 2 , 3 , 4 , 5 , 6 , and 7 .  It is
-  //        used to construct a list of selection parameters for
-  //        clipboard, primary, secondary, select, or cut-buffers 0
-  //        through 7 respectively, in the order given.  If the parameter
-  //        is empty, xterm uses s 0 , to specify the configurable
-  //        primary/clipboard selection and cut-buffer 0.
+	//        set c , p , q , s , 0 , 1 , 2 , 3 , 4 , 5 , 6 , and 7 .  It is
+	//        used to construct a list of selection parameters for
+	//        clipboard, primary, secondary, select, or cut-buffers 0
+	//        through 7 respectively, in the order given.  If the parameter
+	//        is empty, xterm uses s 0 , to specify the configurable
+	//        primary/clipboard selection and cut-buffer 0.
 	// (thank you https://github.com/tmux/tmux/issues/4847#issuecomment-3863645137)
 
-	// macOS *kind of* has multiple clipboards (manpage snippet from pbcopy below)
-	// but the only one relevant to terminal use is general. therefore the argument from
-	// the OSC can be safely dropped and the general clipboard used.
-	//        -pboard {general | ruler | find | font}
-  //            specifies which pasteboard to copy to or paste from.  If no pasteboard is given, the general pasteboard will be used by default.
-
 	if idx := bytes.IndexByte(rawData, ';'); idx != -1 {
-    rawData = rawData[idx+1:]
+		rawData = rawData[idx+1:]
 	}
 
 	buffer := make([]byte, base64.StdEncoding.DecodedLen(len(rawData)))
@@ -75,14 +93,5 @@ func setClipboard(copyToClipboardCmdLine []string, rawData []byte) error {
 	}
 
 	data := buffer[:n]
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, copyToClipboardCmdLine[0], copyToClipboardCmdLine[1:]...)
-	command.Stdin = bytes.NewReader(data)
-
-	if err := command.Run(); err != nil {
-		return err
-	}
-
-	return nil
+	return writer.WriteText(data)
 }

@@ -2,7 +2,8 @@
 
 [![Build Status](https://travis-ci.com/roy2220/osc52pty.svg?branch=master)](https://travis-ci.com/roy2220/osc52pty) [![Coverage Status](https://codecov.io/gh/roy2220/osc52pty/branch/master/graph/badge.svg)](https://codecov.io/gh/roy2220/osc52pty)
 
-osc52pty recognizes OSC 52 sequences and pipes the content to `pbcopy`.
+osc52pty recognizes OSC 52 sequences and writes the content to the native
+system clipboard.
 
 If you're a Mac user who loves Terminal.app, you must be envious of iTerm2 users who
 can easily send a text to local clipboard from a remote side.
@@ -12,7 +13,9 @@ which is designated for clipboard setting. Once a terminal supporting OSC 52 cat
 text in the form of OSC 52 from the output, instead of printing the text onto the screen,
 it decodes the text first and then sends the content to the system clipboard.
 
-Although Terminal.app do NOT support OSC 52, here is the workaround for it.
+Although Terminal.app does not support OSC 52, here is the workaround for it.
+On Linux, native clipboard support targets X11 and may require X11 development
+libraries such as `libx11-dev`/`xorg-dev`.
 
 ## Installation
 
